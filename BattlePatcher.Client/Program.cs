@@ -2,17 +2,18 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 
 using Microsoft.Win32;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
+
+using Application = System.Windows.Forms.Application;
 
 namespace BattlePatcher.Client
 {
@@ -24,12 +25,26 @@ namespace BattlePatcher.Client
             public bool RunOnStartup { get; set; }
         }
 
+        private class GithubReleaseAsset
+        {
+            public string BrowserDownloadUrl { get; set; }
+        }
+
+        private class GithubRelease
+        {
+            public string Name { get; set; }
+            public DateTime CreatedAt { get; set; }
+            public GithubReleaseAsset[] Assets { get; set; }
+        }
+
         private static readonly WebClient WebClient = new WebClient();
-        private static readonly Mutex UpdateMutex = new Mutex();
-        private static readonly Uri BaseUri = new Uri("https://bb.doink.dev");
+        private static readonly Uri BaseUri = new Uri("https://bb-update.doink.dev");
+        private static readonly Uri GithubBaseUri = new Uri("https://api.github.com");
 
         private static readonly string BattlePatcherPath = getBattlePatcherDirectory();
         private static readonly string ConfigPath = Path.Combine(BattlePatcherPath, "Config.json");
+
+        private static DateTime lastReleaseTime;
 
         private static ContextMenu menu;
         private static MenuItem startGameItem;
@@ -46,64 +61,110 @@ namespace BattlePatcher.Client
             }
         }
 
-        private static async Task downloadRequiredFiles(List<string> fileNames)
+        private static void updatePrerequisiteFiles()
         {
-            var downloadTasks = fileNames.Select(fileName =>
+            var fileHashesJson = WebClient.DownloadString(new Uri(BaseUri, "/static/checksums.json"));
+            var fileHashes = JsonConvert.DeserializeObject<Dictionary<string, string>>(fileHashesJson);
+            var filesToDownload = new Dictionary<Uri, string>();
+
+            foreach (var kvp in fileHashes)
             {
-                var filePath = Path.Combine(BattlePatcherPath, fileName);
-                var fileUrl = new Uri(BaseUri, $"/static/{fileName}");
+                var download = false;
+                var filePath = Path.Combine(BattlePatcherPath, kvp.Key);
 
-                if (File.Exists(filePath))
-                    File.Delete(filePath);
+                if (!File.Exists(filePath))
+                {
+                    download = true;
+                }
+                else
+                {
+                    var checksum = calculateChecksum(filePath);
 
-                return WebClient.DownloadFileTaskAsync(fileUrl, filePath);
-            });
+                    if (!checksum.Equals(kvp.Value, StringComparison.CurrentCultureIgnoreCase))
+                        download = true;
+                }
 
-            await Task.WhenAll(downloadTasks);
+                if (download)
+                {
+                    var uri = new Uri(BaseUri, $"/static/{kvp.Key}");
+
+                    filesToDownload.Add(uri, filePath);
+                }
+            }
+
+
+            foreach (var kvp in filesToDownload)
+            {
+                if (File.Exists(kvp.Value))
+                    File.Delete(kvp.Value);
+
+                WebClient.DownloadFile(kvp.Key, kvp.Value);
+            }
         }
 
-        private static void backgroundUpdateCheck()
+        private static bool tryUpdateClient()
         {
-            while (true)
+            WebClient.Headers.Add(HttpRequestHeader.UserAgent, "BattlePatcher.Client");
+
+            var latestReleaseJson = WebClient.DownloadString(new Uri(GithubBaseUri, "/repos/BattlePatcher/BattlePatcher.Client/releases/latest"));
+            var latestRelease = JsonConvert.DeserializeObject<GithubRelease>(latestReleaseJson, new JsonSerializerSettings
             {
-                UpdateMutex.WaitOne();
+                ContractResolver = new DefaultContractResolver { NamingStrategy = new SnakeCaseNamingStrategy() }
+            });
 
-                var fileHashesString = WebClient.DownloadString(new Uri(BaseUri, "/static/checksums.json"));
-                var fileHashes = JsonConvert.DeserializeObject<Dictionary<string, string>>(fileHashesString);
-                var filesToDownload = new List<string>();
+            if (latestRelease.CreatedAt > lastReleaseTime)
+            {
+                var updatedName = $"BattlePatcher.Client-{latestRelease.Name}.exe";
+                var updatedPath = Path.Combine(BattlePatcherPath, updatedName);
 
-                foreach (var kvp in fileHashes)
+                WebClient.DownloadFile(latestRelease.Assets[0].BrowserDownloadUrl, updatedPath);
+
+                var currentChecksum = calculateChecksum(Application.ExecutablePath);
+                var updatedChecksum = calculateChecksum(updatedPath);
+
+                if (currentChecksum != updatedChecksum)
                 {
-                    var download = false;
-                    var filePath = Path.Combine(BattlePatcherPath, kvp.Key);
+                    var updateResult = MessageBox.Show(
+                        $"A new client release ({latestRelease.Name}) is available on GitHub! Press OK to " +
+                        $"automatically update, or press Cancel to skip this version or update it later " +
+                        $"yourself.", "BattlePatcher", MessageBoxButtons.OKCancel, MessageBoxIcon.Information);
 
-                    if (!File.Exists(filePath))
+                    if (updateResult == DialogResult.OK)
                     {
-                        download = true;
+                        var currentId = Process.GetCurrentProcess().Id;
+
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = updatedPath,
+                            WorkingDirectory = BattlePatcherPath,
+                            Arguments = $"{Application.ExecutablePath} {currentId}"
+                        });
+
+                        Application.Exit();
+
+                        return false;
                     }
                     else
                     {
-                        var checksum = calculateChecksum(filePath);
+                        File.Delete(updatedPath);
 
-                        if (!checksum.Equals(kvp.Value, StringComparison.CurrentCultureIgnoreCase))
-                            download = true;
+                        return false;
                     }
-
-                    if (download)
-                        filesToDownload.Add(kvp.Key);
                 }
-
-                if (filesToDownload.Count > 0)
+                else
                 {
-                    var downloadTask = downloadRequiredFiles(filesToDownload);
-
-                    downloadTask.Wait();
+                    lastReleaseTime = latestRelease.CreatedAt;
                 }
-
-                UpdateMutex.ReleaseMutex();
-
-                Thread.Sleep(TimeSpan.FromMinutes(5));
             }
+
+            return true;
+        }
+
+        private static bool backgroundUpdateCheck()
+        {
+            updatePrerequisiteFiles();
+
+            return tryUpdateClient();
         }
 
         private static string getBattlePatcherDirectory()
@@ -130,7 +191,10 @@ namespace BattlePatcher.Client
             {
                 startGameItem.Enabled = false;
 
-                UpdateMutex.WaitOne();
+                if (!backgroundUpdateCheck())
+                {
+                    return;
+                }
 
                 var battleBit = Process.Start(new ProcessStartInfo
                 {
@@ -163,8 +227,6 @@ namespace BattlePatcher.Client
                 {
                     // :)
                 }
-
-                UpdateMutex.ReleaseMutex();
 
                 startGameItem.Enabled = true;
             });
@@ -200,6 +262,28 @@ namespace BattlePatcher.Client
         [STAThread]
         public static void Main(string[] args)
         {
+            if (args.Length == 2)
+            {
+                var oldExecutablePath = args[0];
+                var oldProcessId = int.Parse(args[1]);
+
+                try
+                {
+                    var oldClient = Process.GetProcessById(oldProcessId);
+
+                    while (oldClient != null && !oldClient.HasExited)
+                    {
+                        Thread.Sleep(500);
+                    }
+                }
+                catch (Exception)
+                {
+                    // :)
+                }
+
+                File.Delete(oldExecutablePath);
+            }
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
@@ -274,10 +358,6 @@ namespace BattlePatcher.Client
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
 
-            var updateThread = new Thread(backgroundUpdateCheck);
-
-            updateThread.Start();
-
             menu = new ContextMenu();
 
             startGameItem = new MenuItem("Start BattleBit", startGameHandler);
@@ -301,8 +381,6 @@ namespace BattlePatcher.Client
             };
 
             Application.Run();
-
-            updateThread.Abort();
         }
     }
 }
