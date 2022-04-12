@@ -1,0 +1,36 @@
+name: Main
+
+on:
+  push:
+    branches: [trunk]
+  pull_request:
+    branches: [trunk]
+
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2019
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v3
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v1.1
+
+      - name: Setup NuGet
+        uses: nuget/setup-nuget@v1
+        with:
+          nuget-version: '5.x'
+
+      - name: Restore NuGet packages
+        run: nuget restore BattlePatcher.sln
+
+      - name: Build client for release
+        run: msbuild -t:rebuild -property:Configuration=Release -property:Platform=x64
+
+      - name: Upload built client as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: BattlePatcher.Client
+          path: ./BattlePatcher.Client/bin/x64/Release/BattlePatcher.Client.exe
