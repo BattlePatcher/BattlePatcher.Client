@@ -27,6 +27,7 @@ namespace BattlePatcher.Client
         {
             public string GamePath { get; set; }
             public bool RunOnStartup { get; set; }
+            public bool StartAfterUpdate { get; set; }
         }
 
         private class GithubReleaseAsset
@@ -141,6 +142,8 @@ namespace BattlePatcher.Client
 
                     if (updateResult == DialogResult.OK)
                     {
+                        withConfigSave(() => config.StartAfterUpdate = true);
+
                         var temporaryPath = Path.Combine(BattlePatcherPath,
                             $"BattlePatcher.Client-{updatedChecksum.Substring(0, 8)}.exe");
 
@@ -365,6 +368,7 @@ namespace BattlePatcher.Client
                     {
                         GamePath = string.Empty,
                         RunOnStartup = false,
+                        StartAfterUpdate = false
                     };
                 });
             }
@@ -431,7 +435,7 @@ namespace BattlePatcher.Client
                 MessageBox.Show(
                     $"BattleBit was found in \"{config.GamePath}\". You can now " +
                     $"right click the BattlePatcher icon in your system tray to configure " +
-                    $"it to run on startup and to start the game. Have fun!", "BattlePatcher",
+                    $"it to run on startup or double click it to start the game. Have fun!", "BattlePatcher",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
 
@@ -457,6 +461,15 @@ namespace BattlePatcher.Client
                 Icon = Properties.Resources.BattlePatcher,
                 ContextMenu = menu
             };
+
+            notifyIcon.DoubleClick += startGameHandler;
+
+            if (config.StartAfterUpdate)
+            {
+                config.StartAfterUpdate = false;
+
+                startGameHandler(null, null);
+            }
 
             Application.Run();
         }
