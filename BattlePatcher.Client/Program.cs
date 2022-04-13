@@ -143,10 +143,12 @@ namespace BattlePatcher.Client
 
                         Process.Start(new ProcessStartInfo
                         {
-                            FileName = updatedPath,
+                            FileName = temporaryPath,
                             WorkingDirectory = BattlePatcherPath,
                             Arguments = $"removeOld {Process.GetCurrentProcess().Id} {Application.ExecutablePath}"
                         });
+
+                        notifyIcon.Visible = false;
 
                         Application.Exit();
 
@@ -199,12 +201,12 @@ namespace BattlePatcher.Client
         {
             var thread = new Thread(() =>
             {
-                startGameItem.Enabled = false;
-
                 if (!backgroundUpdateCheck())
                 {
                     return;
                 }
+
+                startGameItem.Enabled = false;
 
                 var battleBit = Process.Start(new ProcessStartInfo
                 {
@@ -319,7 +321,7 @@ namespace BattlePatcher.Client
                         break;
                 }
 
-                return;
+                Environment.Exit(0);
             }
 
             Application.EnableVisualStyles();
