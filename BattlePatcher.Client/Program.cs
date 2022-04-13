@@ -9,11 +9,15 @@ using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
+using IWshRuntimeLibrary;
+
 using Microsoft.Win32;
+
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 
 using Application = System.Windows.Forms.Application;
+using File = System.IO.File;
 
 namespace BattlePatcher.Client
 {
@@ -282,6 +286,24 @@ namespace BattlePatcher.Client
         [STAThread]
         public static void Main(string[] args)
         {
+#if !DEBUG
+            if (Path.GetDirectoryName(Application.ExecutablePath) != BattlePatcherPath)
+            {
+                var clientPath = Path.Combine(BattlePatcherPath, "BattlePatcher.Client.exe");
+
+                File.Copy(Application.ExecutablePath, clientPath);
+
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = clientPath,
+                    WorkingDirectory = BattlePatcherPath,
+                    Arguments = $"removeTemporary {Process.GetCurrentProcess().Id} {Application.ExecutablePath}"
+                });
+
+                return;
+            }
+#endif
+
             if (args.Length >= 3)
             {
                 var previousProcessId = int.Parse(args[1]);
@@ -398,6 +420,13 @@ namespace BattlePatcher.Client
                 {
                     launcher.Kill();
                 }
+
+                var shell = new WshShell();
+                var shortcutPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "BattlePatcher Client.lnk");
+                var shortcut = shell.CreateShortcut(shortcutPath);
+
+                shortcut.TargetPath = Application.ExecutablePath;
+                shortcut.Save();
 
                 MessageBox.Show(
                     $"BattleBit was found in \"{config.GamePath}\". You can now " +
