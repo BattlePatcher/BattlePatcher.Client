@@ -228,6 +228,44 @@ namespace BattlePatcher.Client
                     WorkingDirectory = config.GamePath
                 });
 
+                var hasGameAssembly = false;
+
+                while (!hasGameAssembly)
+                {
+                    var newProcess = Process.GetProcessById(battleBit.Id);
+
+                    if (newProcess == null && !battleBit.HasExited)
+                    {
+                        continue;
+                    }
+                    else if (battleBit.HasExited)
+                    {
+                        MessageBox.Show(
+                            "There was a problem while trying to launch the game, please try launching " +
+                            "the game again and if the problem persists, do not hesitate to ask for " +
+                            "help in our Discord server.", "BattlePatcher", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                        startGameItem.Enabled = true;
+                        exitItem.Enabled = true;
+
+                        return;
+                    }
+
+                    foreach (ProcessModule module in newProcess.Modules)
+                    {
+                        var fileName = Path.GetFileName(module.FileName);
+
+                        if (fileName.Equals("GameAssembly.dll"))
+                        {
+                            hasGameAssembly = true;
+                            break;
+                        }
+                    }
+
+                    if (!hasGameAssembly)
+                        Thread.Sleep(100);
+                }
+
                 var kernelLibrary = Native.GetModuleHandle("kernel32.dll");
                 var loadLibrary = Native.GetProcAddress(kernelLibrary, "LoadLibraryA");
 
@@ -466,7 +504,7 @@ namespace BattlePatcher.Client
 
             if (config.StartAfterUpdate)
             {
-                config.StartAfterUpdate = false;
+                withConfigSave(() => config.StartAfterUpdate = false);
 
                 startGameHandler(null, null);
             }
