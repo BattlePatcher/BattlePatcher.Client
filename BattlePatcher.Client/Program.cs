@@ -57,7 +57,12 @@ namespace BattlePatcher.Client
             using (var sha = SHA256.Create())
             {
                 using (var fileStream = File.OpenRead(filePath))
-                    return BitConverter.ToString(sha.ComputeHash(fileStream));
+                {
+                    return BitConverter
+                        .ToString(sha.ComputeHash(fileStream))
+                        .Replace("-", string.Empty)
+                        .ToLower();
+                }
             }
         }
 
@@ -80,7 +85,7 @@ namespace BattlePatcher.Client
                 {
                     var checksum = calculateChecksum(filePath);
 
-                    if (!checksum.Equals(kvp.Value, StringComparison.CurrentCultureIgnoreCase))
+                    if (!checksum.Equals(kvp.Value))
                         download = true;
                 }
 
@@ -114,7 +119,7 @@ namespace BattlePatcher.Client
 
             if (latestRelease.CreatedAt > lastReleaseTime)
             {
-                var updatedName = $"BattlePatcher.Client-{latestRelease.Name}.exe";
+                var updatedName = Path.GetRandomFileName();
                 var updatedPath = Path.Combine(BattlePatcherPath, updatedName);
 
                 WebClient.DownloadFile(latestRelease.Assets[0].BrowserDownloadUrl, updatedPath);
@@ -122,7 +127,7 @@ namespace BattlePatcher.Client
                 var currentChecksum = calculateChecksum(Application.ExecutablePath);
                 var updatedChecksum = calculateChecksum(updatedPath);
 
-                if (currentChecksum != updatedChecksum)
+                if (!currentChecksum.Equals(updatedChecksum))
                 {
                     var updateResult = MessageBox.Show(
                         $"A new client release ({latestRelease.Name}) is available on GitHub! Press OK to " +
@@ -131,13 +136,16 @@ namespace BattlePatcher.Client
 
                     if (updateResult == DialogResult.OK)
                     {
-                        var currentId = Process.GetCurrentProcess().Id;
+                        var temporaryPath = Path.Combine(BattlePatcherPath,
+                            $"BattlePatcher.Client-{updatedChecksum.Substring(0, 8)}.exe");
+
+                        File.Move(updatedPath, temporaryPath);
 
                         Process.Start(new ProcessStartInfo
                         {
                             FileName = updatedPath,
                             WorkingDirectory = BattlePatcherPath,
-                            Arguments = $"{Application.ExecutablePath} {currentId}"
+                            Arguments = $"removeOld {Process.GetCurrentProcess().Id} {Application.ExecutablePath}"
                         });
 
                         Application.Exit();
@@ -153,6 +161,8 @@ namespace BattlePatcher.Client
                 }
                 else
                 {
+                    File.Delete(updatedPath);
+
                     lastReleaseTime = latestRelease.CreatedAt;
                 }
             }
@@ -262,18 +272,18 @@ namespace BattlePatcher.Client
         [STAThread]
         public static void Main(string[] args)
         {
-            if (args.Length == 2)
+            if (args.Length >= 3)
             {
-                var oldExecutablePath = args[0];
-                var oldProcessId = int.Parse(args[1]);
+                var previousProcessId = int.Parse(args[1]);
+                var previousExecutablePath = args[2];
 
                 try
                 {
-                    var oldClient = Process.GetProcessById(oldProcessId);
+                    var previousClient = Process.GetProcessById(previousProcessId);
 
-                    while (oldClient != null && !oldClient.HasExited)
+                    while (previousClient != null && !previousClient.HasExited)
                     {
-                        Thread.Sleep(500);
+                        Thread.Sleep(100);
                     }
                 }
                 catch (Exception)
@@ -281,7 +291,35 @@ namespace BattlePatcher.Client
                     // :)
                 }
 
-                File.Delete(oldExecutablePath);
+                switch (args[0])
+                {
+                    case "removeOld":
+                        var clientPath = Path.Combine(BattlePatcherPath, "BattlePatcher.Client.exe");
+
+                        File.Delete(previousExecutablePath);
+                        File.Copy(Application.ExecutablePath, clientPath);
+
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = clientPath,
+                            WorkingDirectory = BattlePatcherPath,
+                            Arguments = $"removeTemporary {Process.GetCurrentProcess().Id} {Application.ExecutablePath}"
+                        });
+
+                        break;
+
+                    case "removeTemporary":
+                        File.Delete(previousExecutablePath);
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = Application.ExecutablePath,
+                            WorkingDirectory = BattlePatcherPath
+                        });
+
+                        break;
+                }
+
+                return;
             }
 
             Application.EnableVisualStyles();
