@@ -49,6 +49,7 @@ namespace BattlePatcher.Client
         private static ContextMenu menu;
         private static MenuItem startGameItem;
         private static MenuItem runOnStartupItem;
+        private static MenuItem exitItem;
         private static NotifyIcon notifyIcon;
         private static Config config;
 
@@ -176,7 +177,12 @@ namespace BattlePatcher.Client
         {
             updatePrerequisiteFiles();
 
+#if DEBUG
+            return true;
+#else
             return tryUpdateClient();
+#endif
+
         }
 
         private static string getBattlePatcherDirectory()
@@ -207,6 +213,7 @@ namespace BattlePatcher.Client
                 }
 
                 startGameItem.Enabled = false;
+                exitItem.Enabled = false;
 
                 var battleBit = Process.Start(new ProcessStartInfo
                 {
@@ -241,6 +248,7 @@ namespace BattlePatcher.Client
                 }
 
                 startGameItem.Enabled = true;
+                exitItem.Enabled = true;
             });
 
             thread.Start();
@@ -402,6 +410,7 @@ namespace BattlePatcher.Client
 
             startGameItem = new MenuItem("Start BattleBit", startGameHandler);
             runOnStartupItem = new MenuItem("Run on startup", runOnStartupHandler);
+            exitItem = new MenuItem("Exit", exitHandler);
 
             using (var regKey = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", false))
             {
@@ -410,7 +419,7 @@ namespace BattlePatcher.Client
 
             menu.MenuItems.Add(0, startGameItem);
             menu.MenuItems.Add(1, runOnStartupItem);
-            menu.MenuItems.Add(2, new MenuItem("Exit", exitHandler));
+            menu.MenuItems.Add(2, exitItem);
 
             notifyIcon = new NotifyIcon
             {
