@@ -1,11 +1,7 @@
-name: Main
+name: Build
 
 on:
-  push:
-    branches: [trunk]
   pull_request:
-    branches: [trunk]
-
   workflow_dispatch:
 
 jobs:
@@ -21,7 +17,7 @@ jobs:
       - name: Setup NuGet
         uses: nuget/setup-nuget@v1
         with:
-          nuget-version: '5.x'
+          nuget-version: "5.x"
 
       - name: Restore NuGet packages
         run: nuget restore BattlePatcher.sln
