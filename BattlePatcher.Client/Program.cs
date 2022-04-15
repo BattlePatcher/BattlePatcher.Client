@@ -299,10 +299,8 @@ namespace BattlePatcher.Client
             thread.Start();
         }
 
-        private static void runOnStartupHandler(object sender, EventArgs args)
+        private static void configureStartup()
         {
-            runOnStartupItem.Checked = !runOnStartupItem.Checked;
-
             using (var regKey = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true))
             {
                 if (runOnStartupItem.Checked)
@@ -312,6 +310,13 @@ namespace BattlePatcher.Client
             }
 
             withConfigSave(() => config.RunOnStartup = runOnStartupItem.Checked);
+        }
+
+        private static void runOnStartupHandler(object sender, EventArgs args)
+        {
+            runOnStartupItem.Checked = !runOnStartupItem.Checked;
+
+            configureStartup();
         }
 
         private static void exitHandler(object sender, EventArgs args)
@@ -331,6 +336,9 @@ namespace BattlePatcher.Client
             if (Path.GetDirectoryName(Application.ExecutablePath) != BattlePatcherPath)
             {
                 var clientPath = Path.Combine(BattlePatcherPath, "BattlePatcher.Client.exe");
+
+                if (File.Exists(clientPath))
+                    File.Delete(clientPath);
 
                 File.Copy(Application.ExecutablePath, clientPath);
 
@@ -369,7 +377,9 @@ namespace BattlePatcher.Client
                     case "removeOld":
                         var clientPath = Path.Combine(BattlePatcherPath, "BattlePatcher.Client.exe");
 
-                        File.Delete(previousExecutablePath);
+                        if (File.Exists(previousExecutablePath))
+                            File.Delete(previousExecutablePath);
+
                         File.Copy(Application.ExecutablePath, clientPath);
 
                         Process.Start(new ProcessStartInfo
@@ -382,7 +392,9 @@ namespace BattlePatcher.Client
                         break;
 
                     case "removeTemporary":
-                        File.Delete(previousExecutablePath);
+                        if (File.Exists(previousExecutablePath))
+                            File.Delete(previousExecutablePath);
+
                         Process.Start(new ProcessStartInfo
                         {
                             FileName = Application.ExecutablePath,
@@ -413,75 +425,12 @@ namespace BattlePatcher.Client
 
             config = JsonConvert.DeserializeObject<Config>(File.ReadAllText(ConfigPath));
 
-            if (string.IsNullOrEmpty(config.GamePath))
-            {
-                var messageBoxResult = MessageBox.Show(
-                    "This seems to be your first time running BattlePatcher. " +
-                    "We need to determine where your game is located, to do that we ask you to launch the " +
-                    "game through Steam and press OK. Pressing Cancel will close BattlePatcher and let you " +
-                    "setup finish later.", "First time setup", MessageBoxButtons.OKCancel, MessageBoxIcon.Information);
-
-                if (messageBoxResult != DialogResult.OK)
-                {
-                    MessageBox.Show(
-                            "You cancelled the initial setup, if you need any help don't hesitate to ask in our Discord.",
-                            "BattlePatcher", MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-                    return;
-                }
-
-                var battleBitProcesses = Process.GetProcessesByName("BattleBit");
-
-                while (battleBitProcesses.Length < 1)
-                {
-                    Thread.Sleep(500);
-
-                    battleBitProcesses = Process.GetProcessesByName("BattleBit");
-                }
-
-                Thread.Sleep(500);
-
-                var battleBit = battleBitProcesses[0];
-
-                withConfigSave(() =>
-                {
-                    var fileNameBuffer = new StringBuilder(1024);
-                    var fileNameBufferLength = (uint)fileNameBuffer.Capacity + 1;
-                    var filePath = QueryFullProcessImageName(battleBit.Handle, 0, fileNameBuffer, ref fileNameBufferLength)
-                        ? fileNameBuffer.ToString() : null;
-
-                    config.GamePath = Path.GetDirectoryName(filePath);
-                    config.RunOnStartup = false;
-                });
-
-                battleBit.Kill();
-
-                var eacLauncher = Process.GetProcessesByName("BattleBitEAC");
-
-                foreach (var launcher in eacLauncher)
-                {
-                    launcher.Kill();
-                }
-
-                var shell = new WshShell();
-                var shortcutPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "BattlePatcher Client.lnk");
-                var shortcut = shell.CreateShortcut(shortcutPath);
-
-                shortcut.TargetPath = Application.ExecutablePath;
-                shortcut.Save();
-
-                MessageBox.Show(
-                    $"BattleBit was found in \"{config.GamePath}\". You can now " +
-                    $"right click the BattlePatcher icon in your system tray to configure " +
-                    $"it to run on startup or double click it to start the game. Have fun!", "BattlePatcher",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-
             menu = new ContextMenu();
-
             startGameItem = new MenuItem("Start BattleBit", startGameHandler);
             runOnStartupItem = new MenuItem("Run on startup", runOnStartupHandler);
             exitItem = new MenuItem("Exit", exitHandler);
+
+            startGameItem.Enabled = false;
 
             using (var regKey = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", false))
             {
@@ -502,12 +451,93 @@ namespace BattlePatcher.Client
 
             notifyIcon.DoubleClick += startGameHandler;
 
-            if (config.StartAfterUpdate)
+            var thread = new Thread(() =>
             {
-                withConfigSave(() => config.StartAfterUpdate = false);
+                if (string.IsNullOrEmpty(config.GamePath))
+                {
+                    MessageBox.Show(
+                        "This seems to be your first time running BattlePatcher. We will try to " +
+                        "launch BattleBit automatically for you to detect where it's located, but " +
+                        "if it doesn't open after a while please try launching it through Steam yourself.",
+                        "First time setup", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
-                startGameHandler(null, null);
-            }
+                    Process.Start("steam://run/1611740");
+
+                    var battleBitProcesses = Process.GetProcessesByName("BattleBit");
+
+                    for (var i = 0; i < 60 && battleBitProcesses.Length < 1; i++)
+                    {
+                        Thread.Sleep(500);
+
+                        battleBitProcesses = Process.GetProcessesByName("BattleBit");
+                    }
+
+                    if (battleBitProcesses.Length < 1)
+                    {
+                        MessageBox.Show(
+                            "Failed to detect BattleBit, please launch the game through Steam" +
+                            "and then press OK.", "First time setup", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                        while (battleBitProcesses.Length < 1)
+                        {
+                            Thread.Sleep(500);
+
+                            battleBitProcesses = Process.GetProcessesByName("BattleBit");
+                        }
+                    }
+
+                    Thread.Sleep(500);
+
+                    var battleBit = battleBitProcesses[0];
+
+                    withConfigSave(() =>
+                    {
+                        var fileNameBuffer = new StringBuilder(1024);
+                        var fileNameBufferLength = (uint)fileNameBuffer.Capacity + 1;
+                        var filePath = QueryFullProcessImageName(battleBit.Handle, 0, fileNameBuffer, ref fileNameBufferLength)
+                            ? fileNameBuffer.ToString() : null;
+
+                        config.GamePath = Path.GetDirectoryName(filePath);
+                        config.RunOnStartup = false;
+                    });
+
+                    battleBit.Kill();
+
+                    var eacLauncher = Process.GetProcessesByName("BattleBitEAC");
+
+                    foreach (var launcher in eacLauncher)
+                    {
+                        launcher.Kill();
+                    }
+
+                    var shell = new WshShell();
+                    var shortcutPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "BattlePatcher Client.lnk");
+                    var shortcut = shell.CreateShortcut(shortcutPath);
+
+                    shortcut.TargetPath = Application.ExecutablePath;
+                    shortcut.Save();
+
+                    runOnStartupItem.Checked = true;
+
+                    configureStartup();
+
+                    MessageBox.Show(
+                        $"BattleBit was found in \"{config.GamePath}\". You can now double click the " +
+                        $"BattlePatcher icon in your system tray (bottom right of your screen) to start the " +
+                        $"game. Have fun!", "BattlePatcher", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+
+                startGameItem.Enabled = true;
+
+                if (config.StartAfterUpdate)
+                {
+                    withConfigSave(() => config.StartAfterUpdate = false);
+
+                    startGameHandler(null, null);
+                }
+            });
+
+            thread.Start();
 
             Application.Run();
         }
