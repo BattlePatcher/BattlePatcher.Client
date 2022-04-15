@@ -9,6 +9,8 @@ using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
+using BattlePatcher.Client.Forms;
+
 using IWshRuntimeLibrary;
 
 using Microsoft.Win32;
@@ -21,15 +23,16 @@ using File = System.IO.File;
 
 namespace BattlePatcher.Client
 {
+    public class BattlePatcherConfig
+    {
+        public string GamePath { get; set; } = string.Empty;
+        public bool RunOnStartup { get; set; } = true;
+        public bool StartAfterUpdate { get; set; } = false;
+        public int InjectionDelay { get; set; } = 2500;
+    }
+
     public static class Program
     {
-        private class Config
-        {
-            public string GamePath { get; set; }
-            public bool RunOnStartup { get; set; }
-            public bool StartAfterUpdate { get; set; }
-        }
-
         private class GithubReleaseAsset
         {
             public string BrowserDownloadUrl { get; set; }
@@ -54,9 +57,11 @@ namespace BattlePatcher.Client
         private static ContextMenu menu;
         private static MenuItem startGameItem;
         private static MenuItem runOnStartupItem;
+        private static MenuItem changeInjectionDelayItem;
         private static MenuItem exitItem;
         private static NotifyIcon notifyIcon;
-        private static Config config;
+
+        public static BattlePatcherConfig Config;
 
         private static string calculateChecksum(string filePath)
         {
@@ -142,7 +147,7 @@ namespace BattlePatcher.Client
 
                     if (updateResult == DialogResult.OK)
                     {
-                        withConfigSave(() => config.StartAfterUpdate = true);
+                        withConfigSave(() => Config.StartAfterUpdate = true);
 
                         var temporaryPath = Path.Combine(BattlePatcherPath,
                             $"BattlePatcher.Client-{updatedChecksum.Substring(0, 8)}.exe");
@@ -207,7 +212,7 @@ namespace BattlePatcher.Client
         {
             action();
 
-            File.WriteAllText(ConfigPath, JsonConvert.SerializeObject(config, Formatting.Indented));
+            File.WriteAllText(ConfigPath, JsonConvert.SerializeObject(Config, Formatting.Indented));
         }
 
         private static void startGameHandler(object sender, EventArgs args)
@@ -224,8 +229,8 @@ namespace BattlePatcher.Client
 
                 var battleBit = Process.Start(new ProcessStartInfo
                 {
-                    FileName = Path.Combine(config.GamePath, "BattleBit.exe"),
-                    WorkingDirectory = config.GamePath
+                    FileName = Path.Combine(Config.GamePath, "BattleBit.exe"),
+                    WorkingDirectory = Config.GamePath
                 });
 
                 var hasGameAssembly = false;
@@ -266,6 +271,8 @@ namespace BattlePatcher.Client
                         Thread.Sleep(100);
                 }
 
+                Thread.Sleep(Config.InjectionDelay);
+
                 var kernelLibrary = Native.GetModuleHandle("kernel32.dll");
                 var loadLibrary = Native.GetProcAddress(kernelLibrary, "LoadLibraryA");
 
@@ -303,13 +310,14 @@ namespace BattlePatcher.Client
         {
             using (var regKey = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true))
             {
-                if (runOnStartupItem.Checked)
+                if (runOnStartupItem == null || runOnStartupItem.Checked)
                     regKey.SetValue("BattlePatcher", Application.ExecutablePath);
                 else
                     regKey.DeleteValue("BattlePatcher", false);
             }
 
-            withConfigSave(() => config.RunOnStartup = runOnStartupItem.Checked);
+            if (runOnStartupItem != null)
+                withConfigSave(() => Config.RunOnStartup = runOnStartupItem.Checked);
         }
 
         private static void runOnStartupHandler(object sender, EventArgs args)
@@ -317,6 +325,22 @@ namespace BattlePatcher.Client
             runOnStartupItem.Checked = !runOnStartupItem.Checked;
 
             configureStartup();
+        }
+
+        private static void changeInjectionDelayHandler(object sender, EventArgs args)
+        {
+            var promptForm = new ChangeInjectionDelayForm();
+
+            if (promptForm.ShowDialog() == DialogResult.OK)
+            {
+                withConfigSave(() => Config.InjectionDelay = promptForm.InputDelay);
+
+                changeInjectionDelayItem.Text = $"Change injection delay ({Config.InjectionDelay})";
+
+                MessageBox.Show(
+                    $"Injection delay was successfuly changed to {Config.InjectionDelay}",
+                    "BattlePatcher", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
         }
 
         private static void exitHandler(object sender, EventArgs args)
@@ -414,20 +438,18 @@ namespace BattlePatcher.Client
             {
                 withConfigSave(() =>
                 {
-                    config = new Config
-                    {
-                        GamePath = string.Empty,
-                        RunOnStartup = false,
-                        StartAfterUpdate = false
-                    };
+                    Config = new BattlePatcherConfig();
+
+                    configureStartup();
                 });
             }
 
-            config = JsonConvert.DeserializeObject<Config>(File.ReadAllText(ConfigPath));
+            Config = JsonConvert.DeserializeObject<BattlePatcherConfig>(File.ReadAllText(ConfigPath));
 
             menu = new ContextMenu();
             startGameItem = new MenuItem("Start BattleBit", startGameHandler);
             runOnStartupItem = new MenuItem("Run on startup", runOnStartupHandler);
+            changeInjectionDelayItem = new MenuItem($"Change injection delay ({Config.InjectionDelay})", changeInjectionDelayHandler);
             exitItem = new MenuItem("Exit", exitHandler);
 
             startGameItem.Enabled = false;
@@ -439,7 +461,8 @@ namespace BattlePatcher.Client
 
             menu.MenuItems.Add(0, startGameItem);
             menu.MenuItems.Add(1, runOnStartupItem);
-            menu.MenuItems.Add(2, exitItem);
+            menu.MenuItems.Add(2, changeInjectionDelayItem);
+            menu.MenuItems.Add(3, exitItem);
 
             notifyIcon = new NotifyIcon
             {
@@ -453,7 +476,7 @@ namespace BattlePatcher.Client
 
             var thread = new Thread(() =>
             {
-                if (string.IsNullOrEmpty(config.GamePath))
+                if (string.IsNullOrEmpty(Config.GamePath))
                 {
                     MessageBox.Show(
                         "This seems to be your first time running BattlePatcher. We will try to " +
@@ -497,8 +520,8 @@ namespace BattlePatcher.Client
                         var filePath = QueryFullProcessImageName(battleBit.Handle, 0, fileNameBuffer, ref fileNameBufferLength)
                             ? fileNameBuffer.ToString() : null;
 
-                        config.GamePath = Path.GetDirectoryName(filePath);
-                        config.RunOnStartup = false;
+                        Config.GamePath = Path.GetDirectoryName(filePath);
+                        Config.RunOnStartup = false;
                     });
 
                     battleBit.Kill();
@@ -522,16 +545,16 @@ namespace BattlePatcher.Client
                     configureStartup();
 
                     MessageBox.Show(
-                        $"BattleBit was found in \"{config.GamePath}\". You can now double click the " +
+                        $"BattleBit was found in \"{Config.GamePath}\". You can now double click the " +
                         $"BattlePatcher icon in your system tray (bottom right of your screen) to start the " +
                         $"game. Have fun!", "BattlePatcher", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
 
                 startGameItem.Enabled = true;
 
-                if (config.StartAfterUpdate)
+                if (Config.StartAfterUpdate)
                 {
-                    withConfigSave(() => config.StartAfterUpdate = false);
+                    withConfigSave(() => Config.StartAfterUpdate = false);
 
                     startGameHandler(null, null);
                 }
